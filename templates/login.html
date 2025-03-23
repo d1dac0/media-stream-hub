@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Media Streamer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/login.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <div class="logo">
+                <i class="fas fa-play-circle"></i>
+            </div>
+            <h1>Media Streamer</h1>
+            <p>Sign in to access your media library</p>
+        </div>
+        
+        <form id="login-form" class="login-form" method="POST" action="{{ url_for('login') }}" autocomplete="off">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            
+            <div class="form-group form-floating">
+                <input type="text" id="username" name="username" required autocomplete="username" placeholder=" ">
+                <label for="username">Username</label>
+            </div>
+            
+            <div class="form-group">
+                <div class="password-container form-floating">
+                    <input type="password" id="password" name="password" required autocomplete="current-password" placeholder=" ">
+                    <label for="password">Password</label>
+                    <i class="toggle-password fas fa-eye"></i>
+                </div>
+            </div>
+            
+            <button type="submit" id="login-button">
+                <span>Sign In</span>
+            </button>
+            
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="error-message" style="display: block;">
+                            <i class="fas fa-exclamation-circle"></i> {{ message }}
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+            
+            <div id="error-message" class="error-message" style="display: none;">
+                <i class="fas fa-exclamation-circle"></i> Invalid username or password
+            </div>
+            
+            <div id="login-attempts-message" class="login-attempts-message" style="display: none;">
+                <i class="fas fa-exclamation-triangle"></i> Too many login attempts. Please try again later.
+            </div>
+        </form>
+        
+        <div class="footer-text">
+            <p>Secure media streaming platform</p>
+            <p>&copy; {{ current_year }} Media Streamer</p>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const loginForm = document.getElementById('login-form');
+            const errorMessage = document.getElementById('error-message');
+            const loginAttemptsMessage = document.getElementById('login-attempts-message');
+            const loginButton = document.getElementById('login-button');
+            const togglePassword = document.querySelector('.toggle-password');
+            const passwordInput = document.getElementById('password');
+            
+            // Toggle password visibility
+            togglePassword.addEventListener('click', function() {
+                const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
+                passwordInput.setAttribute('type', type);
+                this.classList.toggle('fa-eye');
+                this.classList.toggle('fa-eye-slash');
+            });
+
+            // Simple client-side rate limiting
+            let loginAttempts = 0;
+            let lockoutTime = null;
+            
+            function checkLockout() {
+                if (lockoutTime && new Date() < lockoutTime) {
+                    loginButton.disabled = true;
+                    loginAttemptsMessage.style.display = 'block';
+                    return true;
+                } else if (lockoutTime && new Date() >= lockoutTime) {
+                    // Reset after lockout period
+                    loginAttempts = 0;
+                    lockoutTime = null;
+                    loginButton.disabled = false;
+                    loginAttemptsMessage.style.display = 'none';
+                }
+                return false;
+            }
+            
+            // Handle form submission
+            loginForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                if (checkLockout()) return;
+                
+                const formData = new FormData(loginForm);
+                loginButton.disabled = true;
+                loginButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Signing In...';
+                
+                try {
+                    const response = await fetch('/login', {
+                        method: 'POST',
+                        body: formData,
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-Token': document.querySelector('input[name="csrf_token"]').value
+                        },
+                        credentials: 'same-origin'
+                    });
+                    
+                    const contentType = response.headers.get('content-type');
+                    let data;
+                    
+                    if (contentType && contentType.includes('application/json')) {
+                        data = await response.json();
+                    } else {
+                        // If response is not JSON, redirect to the response URL
+                        window.location.href = response.url;
+                        return;
+                    }
+                    
+                    if (response.status === 429) {
+                        // Rate limit exceeded
+                        loginAttemptsMessage.style.display = 'block';
+                        errorMessage.style.display = 'none';
+                        loginAttempts = 5; // Force lockout
+                        lockoutTime = new Date(new Date().getTime() + 60000); // 1 minute lockout
+                        setTimeout(() => checkLockout(), 60000);
+                        loginButton.innerHTML = '<span>Sign In</span>';
+                        return;
+                    }
+                    
+                    if (response.ok) {
+                        if (data.status === 'success') {
+                            loginButton.innerHTML = '<i class="fas fa-check"></i> Success!';
+                            setTimeout(() => {
+                                window.location.href = '/';
+                            }, 500);
+                        } else {
+                            throw new Error('Login failed');
+                        }
+                    } else {
+                        errorMessage.style.display = 'block';
+                        loginAttempts++;
+                        
+                        if (loginAttempts >= 5) {
+                            lockoutTime = new Date(new Date().getTime() + 60000); // 1 minute lockout
+                            loginAttemptsMessage.style.display = 'block';
+                            setTimeout(() => checkLockout(), 60000);
+                        }
+                        loginButton.disabled = false;
+                        loginButton.innerHTML = '<span>Sign In</span>';
+                    }
+                } catch (error) {
+                    console.error('Login error:', error);
+                    errorMessage.style.display = 'block';
+                    loginButton.disabled = false;
+                    loginButton.innerHTML = '<span>Sign In</span>';
+                }
+            });
+
+            // Check lockout status on page load
+            checkLockout();
+        });
+    </script>
+</body>
+</html>

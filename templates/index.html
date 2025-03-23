@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>Media Streamer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Media Streamer</h1>
+            <div class="search-container">
+                <input type="text" id="search-input" placeholder="Search media...">
+                <button id="search-button"><i class="fas fa-search"></i></button>
+            </div>
+            <div class="user-actions">
+                <a href="#" id="logout-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
+            </div>
+        </header>
+
+        <main>
+            <div class="sidebar">
+                <div class="filter-section">
+                    <h3>Filters</h3>
+                    <div class="filter-options">
+                        <button class="filter-btn active" data-filter="all">All</button>
+                        <button class="filter-btn" data-filter="video">Videos</button>
+                        <button class="filter-btn" data-filter="audio">Audio</button>
+                    </div>
+                </div>
+                <div class="media-list-container">
+                    <h3>Media Library</h3>
+                    <ul id="media-list" class="media-list">
+                        <!-- Media items will be populated here -->
+                        <li class="loading">Loading media...</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="player-container">
+                <div id="media-player-wrapper">
+                    <div id="player-placeholder">
+                        <i class="fas fa-play-circle"></i>
+                        <p>Select a media file to start playing</p>
+                    </div>
+                    <video id="video-player" controls style="display: none;">
+                        Your browser does not support the video tag.
+                    </video>
+                    <audio id="audio-player" controls style="display: none;">
+                        Your browser does not support the audio tag.
+                    </audio>
+                </div>
+                <div class="media-info">
+                    <h2 id="current-media-title">No media selected</h2>
+                    <div class="playback-controls">
+                        <button id="previous-btn" disabled><i class="fas fa-step-backward"></i></button>
+                        <button id="play-pause-btn" disabled><i class="fas fa-play"></i></button>
+                        <button id="next-btn" disabled><i class="fas fa-step-forward"></i></button>
+                        <div class="volume-control">
+                            <i class="fas fa-volume-up"></i>
+                            <input type="range" id="volume-slider" min="0" max="1" step="0.1" value="1">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>&copy; 2025 Media Streamer | <a href="#" id="settings-btn">Settings</a></p>
+        </footer>
+    </div>
+
+    <div id="settings-modal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Settings</h2>
+            <div class="settings-form">
+                <div class="form-group">
+                    <label for="media-folder">Media Folder Path:</label>
+                    <input type="text" id="media-folder" placeholder="Enter path to your media folder">
+                </div>
+                <button id="save-settings">Save Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

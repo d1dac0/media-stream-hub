@@ -1,0 +1,3 @@
+@echo off
+echo Starting Media Streamer in production mode...
+start /min pythonw start_server.py
