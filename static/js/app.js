@@ -1,14 +1,13 @@
 document.addEventListener('DOMContentLoaded', () => {
     // DOM Elements
     const mediaList = document.getElementById('media-list');
-    const videoPlayer = document.getElementById('video-player');
-    const audioPlayer = document.getElementById('audio-player');
+    const videoPlayerEl = document.getElementById('video-player');
+    const audioPlayerEl = document.getElementById('audio-player');
     const playerPlaceholder = document.getElementById('player-placeholder');
     const currentMediaTitle = document.getElementById('current-media-title');
     const playPauseBtn = document.getElementById('play-pause-btn');
     const previousBtn = document.getElementById('previous-btn');
     const nextBtn = document.getElementById('next-btn');
-    const volumeSlider = document.getElementById('volume-slider');
     const searchInput = document.getElementById('search-input');
     const searchButton = document.getElementById('search-button');
     const filterButtons = document.querySelectorAll('.filter-btn');
@@ -18,6 +17,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const saveSettingsBtn = document.getElementById('save-settings');
     const mediaFolderInput = document.getElementById('media-folder');
     const logoutLink = document.getElementById('logout-link');
+
+    // Player instance
+    let player;
 
     // State variables
     let mediaFiles = [];
@@ -29,6 +31,39 @@ document.addEventListener('DOMContentLoaded', () => {
     let searchQuery = '';
     let csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
     
+    // Centralized API calls
+    const api = {
+        async get(url) {
+            const response = await fetch(url, {
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-Token': csrfToken
+                }
+            });
+            if (response.status === 401) {
+                showLoginModal();
+                throw new Error('User not authenticated');
+            }
+            return response;
+        },
+        async post(url, data) {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-Token': csrfToken
+                },
+                body: JSON.stringify(data)
+            });
+            if (response.status === 401) {
+                showLoginModal();
+                throw new Error('User not authenticated');
+            }
+            return response;
+        }
+    };
+
     // Security check - ensure we're not in an iframe to prevent clickjacking
     if (window.self !== window.top) {
         document.body.innerHTML = '<h1>For security reasons, this application cannot be displayed in a frame.</h1>';
@@ -42,21 +77,22 @@ document.addEventListener('DOMContentLoaded', () => {
         await fetchMediaFiles();
         await fetchPlaybackState();
         setupEventListeners();
+        
+        // Initialize Plyr player
+        player = new Plyr('#video-player', {
+            // Options can be added here
+        });
+
+        // Expose player for debugging
+        window.player = player;
+
+        // Periodically check session
+        setInterval(checkSession, 5 * 60 * 1000); // Check every 5 minutes
     }
 
     async function fetchMediaFiles() {
         try {
-            const response = await fetch('/api/media', {
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'X-CSRF-Token': csrfToken
-                }
-            });
-            if (response.status === 401) {
-                // Unauthorized, redirect to login
-                window.location.href = '/login';
-                return;
-            }
+            const response = await api.get('/api/media');
             if (!response.ok) {
                 throw new Error('Failed to fetch media files');
             }
@@ -66,84 +102,90 @@ document.addEventListener('DOMContentLoaded', () => {
             renderMediaList();
         } catch (error) {
             console.error('Error fetching media files:', error);
-            showErrorNotification('Failed to load media files. Please try refreshing the page.');
+            if (error.message !== 'User not authenticated') {
+                showErrorNotification('Failed to load media files. Please try refreshing the page.');
+            }
         }
     }
 
     async function fetchPlaybackState() {
         try {
-            const response = await fetch('/api/playback-state', {
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'X-CSRF-Token': csrfToken
-                }
-            });
+            const response = await api.get('/api/playback-state');
             if (!response.ok) {
                 throw new Error('Failed to fetch playback state');
             }
             playbackState = await response.json();
         } catch (error) {
             console.error('Error fetching playback state:', error);
-            // Non-critical error, don't show to user
             playbackState = {};
         }
     }
 
     function setupEventListeners() {
         // Media list click event
-        mediaList.addEventListener('click', (e) => {
-            const item = e.target.closest('.media-item');
-            if (item) {
-                const index = parseInt(item.dataset.index);
-                if (!isNaN(index)) {
-                    playMedia(index);
+        if (mediaList) {
+            mediaList.addEventListener('click', (e) => {
+                const item = e.target.closest('.media-item');
+                if (item) {
+                    const index = parseInt(item.dataset.index, 10);
+                    if (!isNaN(index)) {
+                        playMedia(index);
+                    }
                 }
-            }
-        });
+            });
+        }
 
         // Play/Pause button
-        playPauseBtn.addEventListener('click', togglePlayPause);
+        if(playPauseBtn) {
+            playPauseBtn.addEventListener('click', togglePlayPause);
+        }
 
         // Previous button
-        previousBtn.addEventListener('click', playPrevious);
+        if (previousBtn) {
+            previousBtn.addEventListener('click', playPrevious);
+        }
 
         // Next button
-        nextBtn.addEventListener('click', playNext);
-
-        // Volume slider
-        volumeSlider.addEventListener('input', () => {
-            const volume = volumeSlider.value / 100;
-            if (videoPlayer) videoPlayer.volume = volume;
-            if (audioPlayer) audioPlayer.volume = volume;
-        });
+        if (nextBtn) {
+            nextBtn.addEventListener('click', playNext);
+        }
 
         // Search functionality
-        searchButton.addEventListener('click', performSearch);
-        searchInput.addEventListener('keyup', (e) => {
-            if (e.key === 'Enter') {
-                performSearch();
-            }
-        });
+        if (searchButton) {
+            searchButton.addEventListener('click', performSearch);
+        }
+        if (searchInput) {
+            searchInput.addEventListener('keyup', (e) => {
+                if (e.key === 'Enter') {
+                    performSearch();
+                }
+            });
+        }
 
         // Filter buttons
-        filterButtons.forEach(button => {
-            button.addEventListener('click', () => {
-                filterButtons.forEach(btn => btn.classList.remove('active'));
-                button.classList.add('active');
-                currentFilter = button.dataset.filter;
-                applyFilters();
+        if (filterButtons) {
+            filterButtons.forEach(button => {
+                button.addEventListener('click', () => {
+                    filterButtons.forEach(btn => btn.classList.remove('active'));
+                    button.classList.add('active');
+                    currentFilter = button.dataset.filter;
+                    applyFilters();
+                });
             });
-        });
+        }
 
         // Settings modal
-        settingsBtn.addEventListener('click', () => {
-            mediaFolderInput.value = localStorage.getItem('mediaFolder') || '';
-            settingsModal.style.display = 'block';
-        });
+        if (settingsBtn) {
+            settingsBtn.addEventListener('click', () => {
+                settingsModal.style.display = 'block';
+            });
+        }
 
-        closeModalBtn.addEventListener('click', () => {
-            settingsModal.style.display = 'none';
-        });
+        if (closeModalBtn) {
+            closeModalBtn.addEventListener('click', () => {
+                settingsModal.style.display = 'none';
+            });
+        }
 
         window.addEventListener('click', (e) => {
             if (e.target === settingsModal) {
@@ -151,68 +193,41 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        saveSettingsBtn.addEventListener('click', async () => {
-            const mediaFolder = mediaFolderInput.value.trim();
-            
-            try {
-                const response = await fetch('/api/settings', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Requested-With': 'XMLHttpRequest',
-                        'X-CSRF-Token': csrfToken
-                    },
-                    body: JSON.stringify({ mediaFolder })
-                });
+        if (saveSettingsBtn) {
+            saveSettingsBtn.addEventListener('click', async () => {
+                const mediaFolder = mediaFolderInput.value.trim();
                 
-                if (!response.ok) {
-                    throw new Error('Failed to save settings');
+                try {
+                    const response = await api.post('/api/settings', { media_folder: mediaFolder });
+                    
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.error || 'Failed to save settings');
+                    }
+                    
+                    settingsModal.style.display = 'none';
+                    await fetchMediaFiles();
+                    showNotification('Settings saved successfully');
+                } catch (error) {
+                    console.error('Error saving settings:', error);
+                    showErrorNotification(error.message || 'Failed to save settings. Please try again.');
                 }
-                
-                localStorage.setItem('mediaFolder', mediaFolder);
-                settingsModal.style.display = 'none';
-                
-                // Refresh media files
-                await fetchMediaFiles();
-                
-                showNotification('Settings saved successfully');
-            } catch (error) {
-                console.error('Error saving settings:', error);
-                showErrorNotification('Failed to save settings. Please try again.');
-            }
-        });
+            });
+        }
 
         // Logout link
-        logoutLink.addEventListener('click', (e) => {
-            e.preventDefault();
-            
-            // Create a form to submit the logout request with CSRF token
-            const form = document.createElement('form');
-            form.method = 'POST';
-            form.action = '/logout';
-            
-            const csrfInput = document.createElement('input');
-            csrfInput.type = 'hidden';
-            csrfInput.name = 'csrf_token';
-            csrfInput.value = csrfToken;
-            
-            form.appendChild(csrfInput);
-            document.body.appendChild(form);
-            form.submit();
-        });
+        if (logoutLink) {
+            logoutLink.addEventListener('click', (e) => {
+                e.preventDefault();
+                logout();
+            });
+        }
 
-        // Video and audio player events
-        videoPlayer.addEventListener('timeupdate', saveCurrentPlaybackPosition);
-        audioPlayer.addEventListener('timeupdate', saveCurrentPlaybackPosition);
-        
-        // Prevent video player from being controlled by keyboard to avoid focus issues
-        videoPlayer.addEventListener('keydown', (e) => {
-            e.stopPropagation();
-        });
-        
-        // Add event listeners for media ended
-        videoPlayer.addEventListener('ended', playNext);
-        audioPlayer.addEventListener('ended', playNext);
+        // Player events
+        if (player) {
+            player.on('timeupdate', saveCurrentPlaybackPosition);
+            player.on('ended', playNext);
+        }
     }
 
     function renderMediaList() {
@@ -251,7 +266,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             return `
                 <div class="folder" id="${folderId}">
-                    <div class="folder-header" onclick="document.getElementById('${folderId}').classList.toggle('open')">
+                    <div class="folder-header">
                         <i class="fas fa-folder"></i>
                         <i class="fas fa-folder-open"></i>
                         <div class="folder-name">${escapeHtml(folderName)}</div>
@@ -264,6 +279,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }).join('');
 
         mediaList.innerHTML = html;
+
+        // Add event listeners to folder headers
+        document.querySelectorAll('.folder-header').forEach(header => {
+            header.addEventListener('click', () => {
+                header.parentElement.classList.toggle('open');
+            });
+        });
 
         // Open the folder containing the currently playing media
         if (currentMediaIndex !== -1) {
@@ -293,79 +315,55 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function playMedia(index) {
-        if (index < 0 || index >= filteredMediaFiles.length) return;
-        
+        if (index < 0 || index >= filteredMediaFiles.length) {
+            console.error("Invalid media index requested:", index);
+            return;
+        }
+
         // Save current position before switching
-        if (currentMediaIndex !== -1 && currentPlayer) {
+        if (currentMediaIndex !== -1 && player) {
             saveCurrentPlaybackPosition(true);
         }
         
         currentMediaIndex = index;
         const file = filteredMediaFiles[index];
         
-        // Hide both players and show placeholder initially
-        videoPlayer.style.display = 'none';
-        audioPlayer.style.display = 'none';
-        playerPlaceholder.style.display = 'flex';
+        // Hide placeholder and show player
+        playerPlaceholder.style.display = 'none';
         
         // Set the media title
         currentMediaTitle.textContent = file.name;
         
-        // Determine which player to use based on file type
-        if (file.type === 'video') {
-            currentPlayer = videoPlayer;
-            videoPlayer.style.display = 'block';
-            playerPlaceholder.style.display = 'none';
-            
-            // Set video source with cache-busting parameter for security
-            const timestamp = new Date().getTime();
-            videoPlayer.src = `/media/${encodeURIComponent(file.path)}?t=${timestamp}`;
-            audioPlayer.src = '';
-        } else {
-            currentPlayer = audioPlayer;
-            audioPlayer.style.display = 'block';
-            
-            // Set audio source with cache-busting parameter for security
-            const timestamp = new Date().getTime();
-            audioPlayer.src = `/media/${encodeURIComponent(file.path)}?t=${timestamp}`;
-            videoPlayer.src = '';
-        }
-        
-        // Set volume
-        currentPlayer.volume = volumeSlider.value / 100;
+        // Update player source
+        player.source = {
+            type: file.type,
+            title: file.name,
+            sources: [{
+                src: `/media/${encodeURIComponent(file.path)}`,
+                type: file.type === 'video' ? 'video/mp4' : 'audio/mp3',
+            }],
+        };
         
         // Check if we have a saved position for this file
         if (playbackState[file.path]) {
-            currentPlayer.currentTime = playbackState[file.path];
-        }
-        
-        // Play the media
-        const playPromise = currentPlayer.play();
-        
-        if (playPromise !== undefined) {
-            playPromise.catch(error => {
-                console.error('Error playing media:', error);
-                // Auto-play was prevented, show play button
-                playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+            player.once('canplay', () => {
+                player.currentTime = playbackState[file.path].position || 0;
             });
         }
         
-        // Update play/pause button
-        playPauseBtn.innerHTML = '<i class="fas fa-pause"></i>';
+        // Play the media
+        player.play();
         
         // Update the active item in the list
         renderMediaList();
+
+        // Update control buttons state
+        updateControlButtons();
     }
 
     function togglePlayPause() {
-        if (!currentPlayer) return;
-        
-        if (currentPlayer.paused) {
-            currentPlayer.play();
-            playPauseBtn.innerHTML = '<i class="fas fa-pause"></i>';
-        } else {
-            currentPlayer.pause();
-            playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+        if (player) {
+            player.togglePlay();
         }
     }
 
@@ -416,48 +414,73 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!stillExists) {
                 // Clear the player
                 currentMediaIndex = -1;
-                currentPlayer = null;
-                videoPlayer.style.display = 'none';
-                audioPlayer.style.display = 'none';
+                if (player) player.stop();
                 playerPlaceholder.style.display = 'flex';
                 currentMediaTitle.textContent = 'No media selected';
-                videoPlayer.src = '';
-                audioPlayer.src = '';
             }
         }
     }
 
     function saveCurrentPlaybackPosition(forceSave = false) {
-        if (!currentPlayer || currentMediaIndex === -1) return;
+        if (!player || currentMediaIndex === -1) return;
         
         const file = filteredMediaFiles[currentMediaIndex];
         if (!file) return;
         
         // Only save if we've watched more than 5 seconds or if forceSave is true
-        if (forceSave || currentPlayer.currentTime > 5) {
-            playbackState[file.path] = currentPlayer.currentTime;
+        if (forceSave || player.currentTime > 5) {
+            const currentPosition = player.currentTime;
             
+            // Update local state immediately
+            if (!playbackState[file.path]) playbackState[file.path] = {};
+            playbackState[file.path].position = currentPosition;
+
             // Debounce the API call to prevent too many requests
             clearTimeout(window.savePlaybackTimeout);
-            window.savePlaybackTimeout = setTimeout(() => {
-                fetch('/api/playback-state', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Requested-With': 'XMLHttpRequest',
-                        'X-CSRF-Token': csrfToken
-                    },
-                    body: JSON.stringify({
+            window.savePlaybackTimeout = setTimeout(async () => {
+                try {
+                    await api.post('/api/playback-state', {
                         path: file.path,
-                        position: currentPlayer.currentTime
-                    })
-                }).catch(error => {
+                        position: currentPosition,
+                        volume: player.volume
+                    });
+                } catch (error) {
                     console.error('Error saving playback position:', error);
-                });
+                }
             }, 1000);
         }
     }
     
+    // Session management functions
+    async function checkSession() {
+        try {
+            const response = await api.get('/api/media'); // A simple authenticated endpoint
+            if (!response.ok) {
+                showLoginModal();
+            }
+        } catch (error) {
+            // Error will be thrown if not authenticated, modal already shown
+        }
+    }
+
+    function showLoginModal() {
+        // Simple alert for now, can be replaced with a proper modal
+        alert("Your session has expired. Please log in again to continue.");
+        window.location.href = '/login';
+    }
+
+    function updateControlButtons() {
+        if (playPauseBtn) {
+            playPauseBtn.disabled = currentMediaIndex === -1;
+        }
+        if (previousBtn) {
+            previousBtn.disabled = currentMediaIndex <= 0;
+        }
+        if (nextBtn) {
+            nextBtn.disabled = currentMediaIndex >= filteredMediaFiles.length - 1;
+        }
+    }
+
     // Helper functions for notifications
     function showNotification(message) {
         const notification = document.createElement('div');

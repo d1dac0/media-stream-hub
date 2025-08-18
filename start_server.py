@@ -1,17 +1,26 @@
 import os
-import secrets
-import bcrypt
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 from waitress import serve
 from app import app, logger
 from database import init_db
+from migrations import run_migrations
 
 # Set default environment variables if not already set
-if not os.environ.get('SECRET_KEY'):
+if 'SECRET_KEY' not in os.environ:
     # Generate a random secret key if not provided
+    import secrets
     secret_key = secrets.token_hex(32)
     os.environ['SECRET_KEY'] = secret_key
-    print(f"WARNING: Using a randomly generated SECRET_KEY. For persistent sessions, set this as an environment variable.")
-    logger.warning(f"Using randomly generated SECRET_KEY. Set this in environment for persistent sessions.")
+    logger.warning("Using randomly generated SECRET_KEY. For persistent sessions, set this as an environment variable in a .env file.")
+
+# Run database migrations
+print("Running database migrations...")
+run_migrations()
+print("Migrations completed.")
 
 # Initialize the database and create admin user if needed
 print("Initializing database...")

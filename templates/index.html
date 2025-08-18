@@ -5,8 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>Media Streamer</title>
+    <!-- Plyr CSS -->
+    <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
 <body>
     <div class="container">
@@ -46,12 +49,7 @@
                         <i class="fas fa-play-circle"></i>
                         <p>Select a media file to start playing</p>
                     </div>
-                    <video id="video-player" controls style="display: none;">
-                        Your browser does not support the video tag.
-                    </video>
-                    <audio id="audio-player" controls style="display: none;">
-                        Your browser does not support the audio tag.
-                    </audio>
+                    <video id="video-player" playsinline controls style="display: none;"></video>
                 </div>
                 <div class="media-info">
                     <h2 id="current-media-title">No media selected</h2>
@@ -59,10 +57,6 @@
                         <button id="previous-btn" disabled><i class="fas fa-step-backward"></i></button>
                         <button id="play-pause-btn" disabled><i class="fas fa-play"></i></button>
                         <button id="next-btn" disabled><i class="fas fa-step-forward"></i></button>
-                        <div class="volume-control">
-                            <i class="fas fa-volume-up"></i>
-                            <input type="range" id="volume-slider" min="0" max="1" step="0.1" value="1">
-                        </div>
                     </div>
                 </div>
             </div>
@@ -87,6 +81,8 @@
         </div>
     </div>
 
+    <!-- Plyr JS -->
+    <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

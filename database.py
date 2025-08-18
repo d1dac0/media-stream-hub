@@ -34,13 +34,15 @@ def init_db():
         ''')
         
         # Check if default admin user exists
-        cursor.execute("SELECT * FROM users WHERE username = 'admin'")
-        admin_exists = cursor.fetchone()
+        admin_user = get_user_by_username('admin')
         
-        if not admin_exists:
+        if not admin_user:
             # Generate a random password for admin if not set in environment
-            admin_password = os.environ.get('ADMIN_PASSWORD', 'crUA0XSWYB9gTmq6')
-            
+            admin_password = os.environ.get('ADMIN_PASSWORD')
+            if not admin_password:
+                admin_password = secrets.token_urlsafe(16)
+                logger.warning(f"Generated a random admin password: {admin_password}. Set ADMIN_PASSWORD in your .env file for a persistent password.")
+
             # Hash the password
             salt = bcrypt.gensalt()
             hashed_password = bcrypt.hashpw(admin_password.encode('utf-8'), salt)
@@ -62,54 +64,69 @@ def init_db():
             conn.close()
         return False
 
+def get_user_by_username(username):
+    """Fetches a user by their username."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+        user = cursor.fetchone()
+        conn.close()
+        return user
+    except Exception as e:
+        logger.error(f"Database error while fetching user '{username}': {e}")
+        return None
+
+def get_user_by_id(user_id):
+    """Fetches a user by their ID."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        user = cursor.fetchone()
+        conn.close()
+        return user
+    except Exception as e:
+        logger.error(f"Database error while fetching user with ID {user_id}: {e}")
+        return None
+
+def update_user_last_seen(user_id):
+    """Updates the last_seen timestamp for a user."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET last_seen = CURRENT_TIMESTAMP WHERE id = ?", (user_id,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error updating last_seen for user {user_id}: {e}")
+
 def verify_user(username, password):
     """Verify user credentials"""
     if not username or not password:
         logger.warning("Attempt to verify user with missing credentials")
-        return False
+        return None
 
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Get user by username
-        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
-        user = cursor.fetchone()
-        
+        user = get_user_by_username(username)
         if not user:
             logger.warning(f"Login attempt with non-existent username: {username}")
-            conn.close()
-            return False
-        
+            return None
+
         # Verify password
-        try:
-            # Convert password to bytes for bcrypt
-            password_bytes = password.encode('utf-8')
-            stored_hash = user['password'].encode('utf-8')
-            
-            # Verify the password
-            is_valid = bcrypt.checkpw(password_bytes, stored_hash)
-            
-            if is_valid:
-                logger.info(f"Successful password verification for user: {username}")
-            else:
-                logger.warning(f"Failed password verification for user: {username}")
-            
-            conn.close()
-            return is_valid
-                
-        except Exception as e:
-            logger.error(f"Password verification error for user {username}: {e}")
-            logger.error("Password bytes length: %d", len(password_bytes))
-            logger.error("Stored hash length: %d", len(stored_hash))
-            conn.close()
-            return False
+        password_bytes = password.encode('utf-8')
+        stored_hash = user['password'].encode('utf-8')
+        
+        if bcrypt.checkpw(password_bytes, stored_hash):
+            logger.info(f"Successful password verification for user: {username}")
+            return dict(user)
+        else:
+            logger.warning(f"Failed password verification for user: {username}")
+            return None
             
     except Exception as e:
         logger.error(f"Database error during user verification: {e}")
-        if 'conn' in locals():
-            conn.close()
-        return False
+        return None
 
 def add_user(username, password, is_admin=False):
     """Add a new user to the database"""
@@ -146,6 +163,37 @@ def add_user(username, password, is_admin=False):
         if 'conn' in locals():
             conn.close()
         return False, "Error creating user"
+
+def save_playback_state(user_id, media_path, position, volume):
+    """Saves or updates the playback state for a user and media file."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO playback_state (user_id, media_path, position, volume, last_updated)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, media_path) DO UPDATE SET
+                position = excluded.position,
+                volume = excluded.volume,
+                last_updated = excluded.last_updated
+        """, (user_id, media_path, position, volume))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error saving playback state for user {user_id}: {e}")
+
+def load_playback_state(user_id):
+    """Loads all playback states for a given user."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT media_path, position, volume FROM playback_state WHERE user_id = ?", (user_id,))
+        states = cursor.fetchall()
+        conn.close()
+        return {row['media_path']: {'position': row['position'], 'volume': row['volume']} for row in states}
+    except Exception as e:
+        logger.error(f"Error loading playback state for user {user_id}: {e}")
+        return {}
 
 def get_all_users():
     """Get all users from the database"""
