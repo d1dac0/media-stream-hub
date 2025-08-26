@@ -35,6 +35,21 @@ def apply_migration_001(cursor):
     ''')
     logger.info("Successfully applied migration 001: Created playback_state table.")
 
+def apply_migration_002(cursor):
+    """Adds the media_metadata table for caching TMDB results."""
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS media_metadata (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        filename TEXT UNIQUE NOT NULL,
+        poster_url TEXT,
+        title TEXT,
+        release_year INTEGER,
+        media_type TEXT,
+        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+    logger.info("Successfully applied migration 002: Created media_metadata table.")
+
 def run_migrations():
     """Applies all pending database migrations."""
     try:
@@ -56,8 +71,15 @@ def run_migrations():
             apply_migration_001(cursor)
             cursor.execute("INSERT INTO migrations (name) VALUES ('001_add_last_seen_and_playback_state')")
             logger.info("Migration 001 applied successfully.")
+        
+        # Check if migration 002 has been applied
+        cursor.execute("SELECT 1 FROM migrations WHERE name = '002_add_metadata_cache_table'")
+        if cursor.fetchone() is None:
+            apply_migration_002(cursor)
+            cursor.execute("INSERT INTO migrations (name) VALUES ('002_add_metadata_cache_table')")
+            logger.info("Migration 002 applied successfully.")
         else:
-            logger.info("Migration 001 already applied, skipping.")
+            logger.info("Migration 002 already applied, skipping.")
             
         conn.commit()
         conn.close()

@@ -12,7 +12,7 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'media_stream
 
 def get_db_connection():
     """Create a database connection and return it"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10) # Set 10-second timeout
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -194,6 +194,51 @@ def load_playback_state(user_id):
     except Exception as e:
         logger.error(f"Error loading playback state for user {user_id}: {e}")
         return {}
+
+def get_cached_metadata(filename):
+    """Retrieves cached metadata for a given filename."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM media_metadata WHERE filename = ?", (filename,))
+        data = cursor.fetchone()
+        conn.close()
+        return dict(data) if data else None
+    except Exception as e:
+        logger.error(f"Error getting cached metadata for '{filename}': {e}")
+        return None
+
+def cache_metadata(filename, metadata):
+    """Saves or updates metadata in the cache."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO media_metadata (filename, poster_url, title, release_year, media_type, last_updated)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(filename) DO UPDATE SET
+                poster_url = excluded.poster_url,
+                title = excluded.title,
+                release_year = excluded.release_year,
+                media_type = excluded.media_type,
+                last_updated = CURRENT_TIMESTAMP
+        """, (filename, metadata.get('poster'), metadata.get('title'), metadata.get('year'), metadata.get('type')))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error caching metadata for '{filename}': {e}")
+
+def remove_cached_metadata(filename):
+    """Removes a file's metadata from the cache."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM media_metadata WHERE filename = ?", (filename,))
+        conn.commit()
+        conn.close()
+        logger.info(f"Removed cached metadata for deleted file: {filename}")
+    except Exception as e:
+        logger.error(f"Error removing cached metadata for '{filename}': {e}")
 
 def get_all_users():
     """Get all users from the database"""

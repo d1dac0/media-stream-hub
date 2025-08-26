@@ -4,6 +4,7 @@ import time
 import stat
 import json
 import logging
+import requests
 from datetime import timedelta, datetime
 from flask import Flask, render_template, send_from_directory, jsonify, request, abort, session, make_response, redirect, url_for, flash
 from pathlib import Path
@@ -17,7 +18,8 @@ from logging.handlers import RotatingFileHandler
 from database import (
     init_db, verify_user, add_user, get_all_users, delete_user, 
     change_password, get_user_by_id, update_user_last_seen,
-    save_playback_state, load_playback_state
+    save_playback_state, load_playback_state,
+    get_cached_metadata, cache_metadata
 )
 
 # Set up logging
@@ -114,14 +116,112 @@ def add_security_headers(response):
         "default-src 'self'; "
         "script-src 'self' https://cdnjs.cloudflare.com https://cdn.plyr.io; "
         "style-src 'self' https://cdnjs.cloudflare.com https://cdn.plyr.io; "
-        "img-src 'self' data: https://cdn.plyr.io; "
+        "img-src 'self' data: https://cdn.plyr.io https://image.tmdb.org; "
         "font-src 'self' https://cdnjs.cloudflare.com; "
         "connect-src 'self' https://cdn.plyr.io;"
     )
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
     response.headers['Cache-Control'] = 'no-store, max-age=0'
     return response
+
+# --- TMDB API Integration ---
+TMDB_API_KEY = os.environ.get('TMDB_API_KEY')
+TMDB_BASE_URL = 'https://api.themoviedb.org/3'
+TMDB_POSTER_BASE_URL = 'https://image.tmdb.org/t/p/w500'
+CACHE = {}
+CACHE_EXPIRATION = timedelta(days=7)
+
+def get_media_metadata(filename):
+    """
+    Fetches media metadata from the local cache first, then from TMDB.
+    """
+    # 1. Check local database cache first
+    cached = get_cached_metadata(filename)
+    if cached:
+        # If the cached type is 'Unknown', it's a placeholder.
+        # Treat it as a cache miss to allow re-fetching.
+        if cached.get('media_type') != 'Unknown':
+            return {
+                'poster': cached.get('poster_url'),
+                'title': cached.get('title'),
+                'year': cached.get('release_year'),
+                'type': cached.get('media_type')
+            }
+
+    # 2. If not in cache or placeholder, fetch from TMDB
+    if not TMDB_API_KEY:
+        return {'poster': None, 'title': filename, 'year': None, 'type': 'Unknown'}
+
+    # Clean filename to get a potential title and year
+    clean_name = os.path.splitext(filename)[0].replace('.', ' ').replace('_', ' ').strip()
     
+    # Try to find a year (e.g., 1980-2029)
+    year_match = re.search(r'\b(19[8-9]\d|20[0-2]\d)\b', clean_name)
+    year = None
+    title = clean_name
+
+    if year_match:
+        year = year_match.group(1)
+        # The title is everything before the year
+        title = clean_name[:year_match.start()].strip()
+
+    # Remove common junk keywords from the title
+    junk_keywords = [
+        '1080p', '720p', '4k', '2160p', 'uhd', 'bluray', 'blu-ray', 
+        'x264', 'x265', 'hevc', 'web-dl', 'webdl', 'webrip', 'dvdrip', 
+        'brrip', 'amzn', 'swtyblz', 'hdr10plus', 'ddp5 1', 'atmos'
+    ]
+    for keyword in junk_keywords:
+        title = re.sub(r'\b' + re.escape(keyword) + r'\b', '', title, flags=re.I)
+
+    # Remove any remaining junk like empty parenthesis or brackets and strip
+    title = re.sub(r'\[.*?\]', '', title).strip()
+    title = re.sub(r'\(.*?\)', '', title).strip()
+    title = title.strip()
+
+    def search_tmdb(media_type):
+        try:
+            search_url = f"{TMDB_BASE_URL}/search/{media_type}"
+            params = {'api_key': TMDB_API_KEY, 'query': title}
+            if year:
+                params['year' if media_type == 'movie' else 'first_air_date_year'] = year
+            
+            response = requests.get(search_url, params=params)
+            response.raise_for_status()
+            return response.json()['results']
+        except requests.RequestException as e:
+            logger.error(f"Error searching TMDB for '{title}' ({media_type}): {e}")
+            return []
+
+    results = search_tmdb('movie')
+    media_type_str = 'Movie'
+    if not results:
+        results = search_tmdb('tv')
+        media_type_str = 'TV Show'
+
+    if results:
+        item = results[0]
+        poster_path = item.get('poster_path')
+        poster = f"{TMDB_POSTER_BASE_URL}{poster_path}" if poster_path else None
+        
+        fetched_title = item.get('title') or item.get('name')
+        fetched_year = (item.get('release_date') or item.get('first_air_date') or '').split('-')[0]
+
+        data = {
+            'poster': poster,
+            'title': fetched_title,
+            'year': fetched_year,
+            'type': media_type_str
+        }
+        # 3. Save the newly fetched data to the cache
+        cache_metadata(filename, data)
+        return data
+
+    # If nothing is found, cache a placeholder to avoid repeated lookups
+    placeholder_data = {'poster': None, 'title': title, 'year': year, 'type': 'Unknown'}
+    cache_metadata(filename, placeholder_data)
+    return placeholder_data
+
 # Remove file-based playback state functions
 # No longer needed as this is handled in the database via API
 
@@ -186,23 +286,30 @@ def get_media_files():
         media_files = []
         for root, _, files in os.walk(MEDIA_FOLDER):
             for file in files:
-                file_path = os.path.join(root, file)
-                rel_path = os.path.relpath(file_path, MEDIA_FOLDER)
+                rel_path = os.path.relpath(os.path.join(root, file), MEDIA_FOLDER)
                 ext = os.path.splitext(file)[1].lower()
                 
                 if ext in SUPPORTED_MEDIA_TYPES:
-                    # Get file info
-                    file_stat = os.stat(file_path)
                     file_info = {
                         'name': file,
-                        'path': rel_path.replace('\\', '/'),  # Normalize path for web
-                        'size': file_stat.st_size,
-                        'modified': file_stat.st_mtime,
-                        'type': 'video' if ext in SUPPORTED_VIDEO_TYPES else 'audio'
+                        'path': rel_path.replace('\\', '/'),
                     }
+
+                    if ext in SUPPORTED_AUDIO_TYPES:
+                        file_info['type'] = 'audio'
+                        file_info['metadata'] = {
+                            'poster': None,
+                            'title': os.path.splitext(file)[0].replace('.', ' ').strip(),
+                            'year': None,
+                            'type': 'Audio'
+                        }
+                    else: # It's a video file
+                        file_info['type'] = 'video'
+                        file_info['metadata'] = get_media_metadata(file)
+
                     media_files.append(file_info)
         
-        return jsonify({'files': media_files})  # Wrap in 'files' object
+        return jsonify({'files': media_files})
     except Exception as e:
         logger.error(f"Error getting media files: {e}")
         return jsonify({"error": "Failed to get media files"}), 500
